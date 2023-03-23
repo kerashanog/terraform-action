@@ -1,0 +1,19 @@
+name: "Terraform Apply"
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dir:
+    runs-on: ubuntu-latest
+    outputs:
+      dir: ${{ steps.dir.outputs.status }}
+    steps:
+    - id: dir
+      if: github.event.issue.pull_request && contains(github.event.comment.body, '/terraform apply')
+      run: echo "::set-output name=status::$(echo '${{github.event.comment.body}}' | sed  's/\/terraform apply //g')"
+  apply:
+    needs: dir
+    uses: kerashanog/atlantis-terraform/.github/workflows/terrafrom-apply-reusable.yaml@main
+    with:
+      working-directory: ./${{ needs.dir.outputs.dir }}

@@ -1,0 +1,115 @@
+name: "Terraform Apply Reusable"
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+
+env:
+  # # verbosity setting for Terraform logs
+  TF_LOG: INFO
+  working-directory: ${{ inputs.working-directory }}
+  # # Credentials for deployment to AWS
+  # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # # S3 bucket for the Terraform state
+  # BUCKET_TF_STATE: ${{ secrets.BUCKET_TF_STATE}}
+jobs:
+  terraform:
+    name: "Terraform Infrastructure Change Management"
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.working-directory }}
+  
+    steps:
+      - name: Checkout the repository to the runner
+        uses: actions/checkout@master
+
+      - name: Setup Terraform with specified version on the runner
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ">=1.2.0"          
+          terraform_wrapper: true
+
+      - name: Terraform Init
+        id: init
+        run: terraform init 
+        continue-on-error: true
+  
+      - name: Terraform Format
+        id: fmt      
+        run: terraform fmt -check
+        continue-on-error: true
+    
+      - name: Terraform Validate
+        id: validate
+        if: steps.init.outcome == 'success' 
+        run: terraform validate -no-color 
+        continue-on-error: true
+
+      - name: Terraform Plan
+        id: plan
+        if: steps.init.outcome == 'success'
+        run: terraform plan -no-color -input=false -out tf.plan
+        continue-on-error: true
+      
+      - name: Terraform Apply
+        id: apply
+        if: steps.plan.outcome == 'success'
+        run: terraform apply -auto-approve -no-color -input=false tf.plan
+        continue-on-error: true
+
+      - uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const plan = `${{ steps.apply.outputs.stdout }}`;
+            const maxGitHubBodyCharacters = 65536;
+            function chunkSubstr(str, size) {
+              const numChunks = Math.ceil(str.length / size)
+              const chunks = new Array(numChunks)
+              for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
+              chunks[i] = str.substr(o, size)
+              }
+              return chunks
+            }
+            // Split the Terraform plan into chunks if it's too big and can't fit into the GitHub Action
+            let plans = chunkSubstr(plan, maxGitHubBodyCharacters);
+            for (let i = 0; i < plans.length; i++) {
+              // 1. Prepare format of the comment
+              let output = ``
+              if (i===0){
+              output +=`#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+              #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+              #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+              #### Terraform Apply 📖\`${{ steps.apply.outcome }}\`\n`;
+              }
+              if (i > 0 ) {
+                output += `\nContinued apply output from previous comment.\n`;
+              }
+              output += `<details><summary>Show Apply</summary>\n
+              \`\`\`diff\n${plans[i]}
+              \`\`\`\n\n
+              </details>\n\n`;
+              if (i != (plans.length - 1) ) {
+                output += `\n**Warning**: Output length greater than max comment size. Continued in next comment.\n`;
+              }              
+              if (i === (plans.length -1)) {
+                output += `\n---\n
+                \n*Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working-Directory: \`${{ env.working-directory }}\`*\n`;
+              }
+              // 2. Create a comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              })
+            }
+
+

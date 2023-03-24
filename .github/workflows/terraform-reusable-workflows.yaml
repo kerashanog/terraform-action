@@ -10,7 +10,7 @@ on:
         required: true
       AWS_SECRET_ACCESS_KEY:
         required: true
-      GITHUB_TOKEN:
+      gh_token:
         required: true
       
 
@@ -91,7 +91,7 @@ jobs:
           APPLY: "diff\n${{ steps.apply.outputs.stdout }}"
           DESTROY: "diff\n${{ steps.destroy.outputs.stdout }}"
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.gh_token }}
           script: |
             // 1. Prepare format of the comment
             const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`

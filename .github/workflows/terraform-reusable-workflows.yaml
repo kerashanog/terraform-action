@@ -1,0 +1,116 @@
+name: "Terraform Reusable Workflows"
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+
+env:
+  # # verbosity setting for Terraform logs
+  TF_LOG: INFO
+  working-directory: ${{ inputs.working-directory }}
+  # # Credentials for deployment to AWS
+  # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # # S3 bucket for the Terraform state
+  # BUCKET_TF_STATE: ${{ secrets.BUCKET_TF_STATE}}
+jobs:
+  terraform:
+    name: "Terraform Github Action"
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./${{ env.working-directory }}
+  
+    steps:
+      - name: Checkout the repository to the runner
+        uses: actions/checkout@master
+
+      - name: Setup Terraform with specified version on the runner
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ">=1.2.0"          
+          terraform_wrapper: true
+
+      - name: Terraform Init
+        id: init
+        run: terraform init 
+        continue-on-error: true
+  
+      - name: Terraform Format
+        id: fmt      
+        run: terraform fmt -check
+        continue-on-error: true
+    
+      - name: Terraform Validate
+        id: validate
+        if: steps.init.outcome == 'success' 
+        run: terraform validate -no-color 
+        continue-on-error: true
+
+      - name: Terraform Plan
+        id: plan
+        if: steps.init.outcome == 'success'
+        run: terraform plan -no-color -input=false -out tf.plan
+        continue-on-error: true
+
+      # - name: Terraform Show
+      #   id: show
+      #   if: steps.plan.outcome == 'success' 
+      #   run: terraform show -no-color tf.plan 2>&1 > /tmp/plan.txt
+      #   continue-on-error: true
+
+      - name: Terraform Apply
+        id: apply
+        if: steps.plan.outcome == 'success'
+        run: terraform apply -auto-approve -no-color -input=false tf.plan
+        continue-on-error: true
+      
+      - name: Terraform Destroy
+        id: destroy
+        if: steps.apply.outcome == 'success'
+        run: terraform destroy -auto-approve -no-color -input=false
+        continue-on-error: true
+
+      - uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "diff\n${{ steps.plan.outputs.stdout }}"
+          APPLY: "diff\n${{ steps.apply.outputs.stdout }}"
+          DESTROY: "diff\n${{ steps.destroy.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // 1. Prepare format of the comment
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            <details><summary>Show Plan</summary>\n
+              \`\`\`${process.env.PLAN}
+              \`\`\`\n\n
+            </details>\n
+            #### Terraform Apply 📖\`${{ steps.apply.outcome }}\`
+            <details><summary>Show Apply</summary>\n
+              \`\`\`${process.env.APPLY}
+              \`\`\`\n\n
+            </details>\n
+            #### Terraform Destroy 📖\`${{ steps.destroy.outcome }}\`
+            <details><summary>Show Destroy</summary>\n
+              \`\`\`${process.env.DESTROY}
+              \`\`\`\n\n
+            </details>\n
+            ---\n            
+            *Pushed by: **${{ github.actor }}**, Action: \`${{ github.event_name }}\`, Working-Directory: \`${{ env.working-directory }}\`*`;
+            // 2. Create a comment
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
